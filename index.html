@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Harbor - task board</title>
+<style>
+  :root {
+    --bg: #eaf0f3;
+    --card: #ffffff;
+    --ink: #14232e;
+    --muted: #5b6b76;
+    --line: #d3dde3;
+    --accent: #c2410c;
+    --on-accent: #ffffff;
+    --danger: #b42318;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1a22;
+      --card: #16262f;
+      --ink: #e8eff3;
+      --muted: #9fb1bc;
+      --line: #263944;
+      --accent: #ff8a4c;
+      --on-accent: #14232e;
+      --danger: #ff9b8f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    padding: 32px 16px;
+    background: var(--bg);
+    color: var(--ink);
+    font: 1rem/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { width: min(100%, 560px); }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+  h1 { margin: 0; font-size: 1.9rem; }
+  .count { color: var(--muted); }
+
+  form { display: flex; gap: 8px; margin-bottom: 8px; }
+  input[type="text"] {
+    flex: 1;
+    min-width: 0;
+    padding: 12px 14px;
+    font: inherit;
+    color: var(--ink);
+    background: var(--card);
+    border: 2px solid var(--line);
+    border-radius: 8px;
+  }
+  button {
+    padding: 12px 18px;
+    font: inherit;
+    font-weight: 600;
+    color: var(--on-accent);
+    background: var(--accent);
+    border: 0;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  input:focus-visible, button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .error { min-height: 1.5em; margin: 0 0 8px; color: var(--danger); }
+
+  ul { margin: 0; padding: 0; list-style: none; overflow: hidden; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+  li { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  li:last-child { border-bottom: 0; }
+  li input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--accent); }
+  li label { flex: 1; cursor: pointer; word-break: break-word; }
+  li.done label { color: var(--muted); text-decoration: line-through; }
+  li.empty { color: var(--muted); }
+  button.del {
+    padding: 6px 10px;
+    font-weight: 400;
+    color: var(--muted);
+    background: transparent;
+    border: 1px solid var(--line);
+  }
+  button.del:hover { color: var(--accent); border-color: var(--accent); }
+
+  footer { margin-top: 24px; color: var(--muted); font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Harbor</h1>
+    <span class="count" id="count"></span>
+  </header>
+
+  <form id="add">
+    <input type="text" id="title" placeholder="What needs doing?" maxlength="200" autocomplete="off" aria-label="New task">
+    <button type="submit">Add task</button>
+  </form>
+  <p class="error" id="error" role="alert"></p>
+
+  <ul id="list"></ul>
+
+  <footer id="info"></footer>
+</main>
+
+<script>
+  const list = document.getElementById('list');
+  const form = document.getElementById('add');
+  const input = document.getElementById('title');
+  const count = document.getElementById('count');
+  const errorBox = document.getElementById('error');
+  const info = document.getElementById('info');
+
+  async function api(path, options) {
+    const res = await fetch(path, options);
+    if (!res.ok) throw new Error('Request failed with status ' + res.status);
+    return res.status === 204 ? null : res.json();
+  }
+
+  function showError() {
+    errorBox.textContent = 'Could not reach the server. Is the container still running?';
+  }
+
+  function render(tasks) {
+    list.replaceChildren();
+    const open = tasks.filter(function (t) { return !t.done; }).length;
+    count.textContent = tasks.length ? open + ' of ' + tasks.length + ' open' : '';
+
+    if (!tasks.length) {
+      const li = document.createElement('li');
+      li.className = 'empty';
+      li.textContent = 'No tasks yet. Add your first one above.';
+      list.appendChild(li);
+      return;
+    }
+
+    tasks.forEach(function (task) {
+      const li = document.createElement('li');
+      if (task.done) li.className = 'done';
+
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.id = 't-' + task.id;
+      box.checked = task.done;
+      box.addEventListener('change', function () {
+        act('/api/tasks/' + task.id, { method: 'PATCH' });
+      });
+
+      const label = document.createElement('label');
+      label.htmlFor = box.id;
+      label.textContent = task.title;
+
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'del';
+      del.textContent = 'Delete';
+      del.setAttribute('aria-label', 'Delete task: ' + task.title);
+      del.addEventListener('click', function () {
+        act('/api/tasks/' + task.id, { method: 'DELETE' });
+      });
+
+      li.append(box, label, del);
+      list.appendChild(li);
+    });
+  }
+
+  async function refresh() {
+    render(await api('/api/tasks'));
+    errorBox.textContent = '';
+  }
+
+  async function act(path, options) {
+    try {
+      await api(path, options);
+      await refresh();
+    } catch (e) {
+      showError();
+    }
+  }
+
+  form.addEventListener('submit', async function (e) {
+    e.preventDefault();
+    const title = input.value.trim();
+    if (!title) return;
+    try {
+      await api('/api/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: title })
+      });
+      input.value = '';
+      await refresh();
+    } catch (err) {
+      showError();
+    }
+  });
+
+  refresh().catch(showError);
+
+  api('/api/info').then(function (i) {
+    info.textContent = 'Served by container ' + i.hostname + ', Python ' + i.python +
+      ', app version ' + i.app_version + '. Tasks are saved in ' + i.data_file + '.';
+  }).catch(function () {});
+</script>
+</body>
+</html>
